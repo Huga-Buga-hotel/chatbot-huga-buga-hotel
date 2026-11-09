@@ -1,4 +1,14 @@
-groq==1.7.0
+# PyTorch (dependência do sentence-transformers): em servidor/CI instale antes a
+# versão só-CPU, bem menor:  pip install torch --index-url https://download.pytorch.org/whl/cpu
+groq==0.37.1
+langchain==1.4.9
+langchain-groq==1.1.3
+langchain-chroma==1.1.0
+langchain-huggingface==1.2.3
+langchain-text-splitters==1.1.3
+sentence-transformers==6.2.0
+httpx==0.28.1
 fastapi==0.161.1
 uvicorn[standard]==0.54.0
 python-dotenv==1.2.4
+python-multipart==0.0.20
