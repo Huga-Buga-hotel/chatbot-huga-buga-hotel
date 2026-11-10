@@ -16,11 +16,14 @@ import sys
 from functools import lru_cache
 from pathlib import Path
 
+from dotenv import load_dotenv
 from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_text_splitters import MarkdownHeaderTextSplitter, RecursiveCharacterTextSplitter
 
 ARQUIVO_BASE = Path(__file__).parent / "hotel_info.md"
+
+load_dotenv()  # antes de ler as variáveis (este módulo é importado antes do chatbot.py)
 
 # Modelo multilíngue: perguntas em inglês/espanhol encontram o texto em português.
 # (o all-mpnet-base-v2 usado em aula só funciona bem em inglês)

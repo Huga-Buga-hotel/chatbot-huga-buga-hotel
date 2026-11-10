@@ -85,3 +85,23 @@ def test_prompt_tem_a_data_de_hoje():
 
 def test_health(cliente):
     assert cliente.get("/health").json() == {"status": "ok"}
+
+
+def test_com_token_configurado_so_o_backend_conversa(cliente, monkeypatch):
+    monkeypatch.setenv("CHATBOT_TOKEN", "segredo")
+    usar_modelo_falso(monkeypatch, AIMessage(content="Oi!"))
+    corpo = {"mensagem": "oi", "id_sessao": "s3"}
+
+    assert cliente.post("/chat", json=corpo).status_code == 401
+    assert cliente.post("/chat", json=corpo, headers={"X-Chatbot-Token": "errado"}).status_code == 401
+    assert cliente.delete("/chat/s3").status_code == 401
+    assert cliente.post("/chat", json=corpo, headers={"X-Chatbot-Token": "segredo"}).json() == {"resposta": "Oi!"}
+    # o health check continua aberto (Docker/monitoramento)
+    assert cliente.get("/health").status_code == 200
+
+
+def test_audio_sem_fala_vira_422(cliente, monkeypatch):
+    groq_falso = MagicMock()
+    groq_falso.audio.transcriptions.create.return_value = SimpleNamespace(text=" . ")
+    monkeypatch.setattr(chatbot, "cliente_groq", groq_falso)
+    assert cliente.post("/chat/audio", files={"audio": ("msg.m4a", b"audio")}).status_code == 422

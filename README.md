@@ -62,7 +62,7 @@ logado e ficam no app/site. O bot explica o caminho.
    pip install -r requirements-dev.txt
    ```
 3. Copie `.env.example` para `.env`, coloque sua chave em `GROQ_API_KEY` e o endereço do backend
-   Java em `BACKEND_URL`. Sem o backend, o bot continua respondendo pela base de conhecimento.
+   Java em `BACKEND_URL` (com `/api/v1`). Sem o backend, o bot continua respondendo pela base de conhecimento.
 4. Escolha como testar:
    - **Terminal:** `python chatbot.py` (digite uma pergunta, ou o caminho de um arquivo
      de áudio, ex.: `pergunta.m4a`, para testar a transcrição)
@@ -129,105 +129,29 @@ Retorna `{"status": "ok"}` para verificar se a API está no ar.
 
 Não é preciso manter uma base de conhecimento por idioma: a base fica em português e o modelo traduz.
 
-## Arquitetura recomendada (mobile + backend Java na AWS)
+## Integração (backend Java + app Android, na AWS)
 
 ```
-App mobile (Kotlin/Java) ──HTTPS──▶ Backend Java (Spring Boot, AWS) ──rede interna──▶ API do chatbot (Python, AWS) ──▶ Groq
-                                            ▲                                                │
-                                            └──────── tools: GET /cavernas, /restaurante... ─┘
+App Android / Site ──HTTPS──▶ Backend Java  /api/v1/chat ──rede interna + X-Chatbot-Token──▶ esta API ──▶ Groq
+                                     ▲                                                           │
+                                     └──────────── tools: GET /api/v1/cavernas, /restaurante... ─┘
 ```
 
-- **O app não chama o chatbot direto.** Ele fala só com o backend Java, que autentica o usuário,
-  usa o id do usuário como `id_sessao` e repassa a requisição. Assim a API do chatbot não fica
-  exposta na internet e a chave do Groq nunca vai para o app.
-- **Deploy do chatbot na AWS:** rode em container (ECS Fargate ou App Runner) ou numa EC2.
-  Libere a porta só para o backend (security group) e guarde a `GROQ_API_KEY` em variável de
-  ambiente ou no Secrets Manager.
-- **Histórico em memória:** funciona com **uma** instância. Se o chatbot rodar com várias
-  instâncias, o histórico precisa ir para um armazenamento compartilhado (Redis/ElastiCache ou DynamoDB).
-
-### Backend Java (Spring Boot) — repassando texto e áudio
-
-```java
-@RestController
-@RequestMapping("/api/chat")
-public class ChatController {
-
-    private final RestClient chatbot = RestClient.create("http://chatbot-interno:8000");
-
-    record PerguntaChat(String mensagem, String id_sessao) {}
-    record RespostaChat(String resposta) {}
-    record RespostaChatAudio(String transcricao, String resposta) {}
-
-    @PostMapping
-    public RespostaChat texto(@RequestBody Map<String, String> body, Principal usuario) {
-        return chatbot.post().uri("/chat")
-                .contentType(MediaType.APPLICATION_JSON)
-                .body(new PerguntaChat(body.get("mensagem"), usuario.getName()))
-                .retrieve().body(RespostaChat.class);
-    }
-
-    @PostMapping(value = "/audio", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public RespostaChatAudio audio(@RequestPart("audio") MultipartFile audio,
-                                   @RequestParam(required = false) String idioma,
-                                   Principal usuario) {
-        MultiValueMap<String, Object> form = new LinkedMultiValueMap<>();
-        form.add("audio", audio.getResource()); // mantém o nome original do arquivo (ex.: .m4a)
-        form.add("id_sessao", usuario.getName());
-        if (idioma != null) form.add("idioma", idioma);
-
-        return chatbot.post().uri("/chat/audio")
-                .contentType(MediaType.MULTIPART_FORM_DATA)
-                .body(form)
-                .retrieve().body(RespostaChatAudio.class);
-    }
-}
-```
-
-Lembre de aumentar o limite de upload do Spring (o padrão é 1 MB):
-
-```properties
-spring.servlet.multipart.max-file-size=25MB
-spring.servlet.multipart.max-request-size=25MB
-```
-
-### App Android (Kotlin) — gravando e enviando o áudio
-
-Permissão no `AndroidManifest.xml`: `<uses-permission android:name="android.permission.RECORD_AUDIO" />`
-(pedir também em tempo de execução).
-
-```kotlin
-// Gravação em .m4a (AAC), 16 kHz mono: arquivo pequeno e ideal para o Whisper
-val arquivo = File(context.cacheDir, "mensagem.m4a")
-val gravador = MediaRecorder(context).apply {   // API 31+; antes disso use MediaRecorder()
-    setAudioSource(MediaRecorder.AudioSource.MIC)
-    setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
-    setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
-    setAudioSamplingRate(16_000)
-    setAudioChannels(1)
-    setOutputFile(arquivo.absolutePath)
-    prepare()
-    start()
-}
-// ... quando o usuário soltar o botão:
-gravador.stop(); gravador.release()
-
-// Envio para o backend Java (OkHttp)
-val corpo = MultipartBody.Builder().setType(MultipartBody.FORM)
-    .addFormDataPart("audio", arquivo.name, arquivo.asRequestBody("audio/mp4".toMediaType()))
-    .addFormDataPart("idioma", Locale.getDefault().language) // opcional: "pt", "en", "es"
-    .build()
-
-val requisicao = Request.Builder()
-    .url("https://api.hugabuga.com.br/api/chat/audio")
-    .header("Authorization", "Bearer $token")
-    .post(corpo)
-    .build()
-// resposta: {"transcricao": "...", "resposta": "..."}
-```
-
-Para o bot também **falar** a resposta, o mais simples é usar o `TextToSpeech` nativo do
-Android no próprio app (gratuito e funciona em vários idiomas).
+- **O app não chama o chatbot direto.** Ele usa `POST /api/v1/chat`, `POST /api/v1/chat/audio` e
+  `DELETE /api/v1/chat/{idSessao}` do backend (`ChatController` / `ChatbotService` no repositório
+  Backend-Huga-Buga), que repassa para cá. A chave do Groq nunca vai para o app.
+- **`id_sessao`:** quem monta é o backend (`usuario-<uuid>-<conversa>` ou `anonimo-<conversa>`), a partir de
+  um UUID que o app gera por conversa. Assim ninguém consegue escrever na conversa de outra pessoa.
+- **`CHATBOT_TOKEN`:** com ele definido, `/chat*` exige o header `X-Chatbot-Token` (o backend envia o mesmo
+  valor). O `/health` continua aberto. Sem ele (desenvolvimento), a API fica aberta.
+- **`BACKEND_URL`** inclui o prefixo: `http://localhost:8080/api/v1` (no Docker de produção: `http://api:8080/api/v1`).
+- **Deploy:** o `deploy/aws/docker-compose.yml` do backend sobe API + este chatbot + Caddy (HTTPS) numa EC2,
+  com banco no RDS e fotos no S3. Os dois repositórios ficam lado a lado na EC2. Passo a passo em
+  `Backend-Huga-Buga/deploy/aws/README.md`.
+- **Histórico em memória:** funciona com **uma** instância (como no compose). Para várias, o histórico
+  precisa ir para um armazenamento compartilhado (Redis/ElastiCache ou DynamoDB).
+- **App Android:** a tela do chat (`ChatbotActivity`) envia texto e voz (m4a/AAC 16 kHz mono, até 2 min) e
+  apaga a conversa ao fechar.
 
 ## Limitações
 

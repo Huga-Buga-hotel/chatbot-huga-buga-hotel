@@ -1,10 +1,12 @@
 """API REST do chatbot, para ser consumida pelos apps web e mobile (Java)."""
 
+import os
+import secrets
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -21,6 +23,19 @@ async def ciclo_de_vida(app: FastAPI):
 
 
 app = FastAPI(title="Chatbot Huga Buga Hotel", lifespan=ciclo_de_vida)
+
+
+def conferir_token(x_chatbot_token: Annotated[str | None, Header()] = None) -> None:
+    """Só o backend Java conversa com esta API: ele manda o segredo CHATBOT_TOKEN no header X-Chatbot-Token.
+
+    Sem CHATBOT_TOKEN definido (desenvolvimento local), a API fica aberta.
+    """
+    esperado = os.getenv("CHATBOT_TOKEN", "")
+    if esperado and not secrets.compare_digest((x_chatbot_token or "").encode(), esperado.encode()):
+        raise HTTPException(status_code=401, detail="Token do chatbot inválido.")
+
+
+protegido = [Depends(conferir_token)]
 
 # Libera chamadas vindas do navegador (app web)
 app.add_middleware(
@@ -54,7 +69,7 @@ def health():
     return {"status": "ok"}
 
 
-@app.post("/chat", response_model=RespostaChat)
+@app.post("/chat", response_model=RespostaChat, dependencies=protegido)
 def chat(pergunta: PerguntaChat):
     try:
         return RespostaChat(resposta=responder(pergunta.mensagem, pergunta.id_sessao))
@@ -63,7 +78,7 @@ def chat(pergunta: PerguntaChat):
         raise HTTPException(status_code=502, detail="Não foi possível obter resposta do chatbot.") from erro
 
 
-@app.post("/chat/audio", response_model=RespostaChatAudio)
+@app.post("/chat/audio", response_model=RespostaChatAudio, dependencies=protegido)
 def chat_audio(
     audio: Annotated[UploadFile, File(description="Mensagem de voz (m4a, mp3, ogg, wav, webm...)")],
     id_sessao: Annotated[str, Form()] = "padrao",
@@ -85,7 +100,8 @@ def chat_audio(
         print(f"Erro ao transcrever o áudio: {erro}")
         raise HTTPException(status_code=502, detail="Não foi possível transcrever o áudio.") from erro
 
-    if not texto:
+    # O Whisper às vezes devolve só pontuação ("." / "...") para áudio sem fala
+    if not any(c.isalnum() for c in texto):
         raise HTTPException(status_code=422, detail="Não foi possível entender o áudio.")
 
     try:
@@ -95,7 +111,7 @@ def chat_audio(
         raise HTTPException(status_code=502, detail="Não foi possível obter resposta do chatbot.") from erro
 
 
-@app.delete("/chat/{id_sessao}")
+@app.delete("/chat/{id_sessao}", dependencies=protegido)
 def encerrar_conversa(id_sessao: str):
     limpar_conversa(id_sessao)
     return {"status": "conversa encerrada"}

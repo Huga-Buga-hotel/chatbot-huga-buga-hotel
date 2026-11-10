@@ -8,8 +8,12 @@ import json
 import os
 
 import httpx
+from dotenv import load_dotenv
 
-BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8080")
+load_dotenv()  # antes de ler as variáveis (este módulo é importado antes do chatbot.py)
+
+# Inclui o prefixo da API: as rotas abaixo ("/cavernas"...) são relativas a ele
+BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8080/api/v1")
 TIMEOUT_SEGUNDOS = float(os.getenv("BACKEND_TIMEOUT", "10"))
 MAX_CARACTERES = 6000  # evita mandar respostas gigantes para o modelo
 
